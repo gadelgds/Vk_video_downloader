@@ -7,6 +7,8 @@ import sys
 import base64
 import contextlib
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 
 def _load_combined_certs(context, use_certifi=True):
     """Загрузить в SSL-контекст И certifi, И системные сертификаты.
@@ -72,42 +74,65 @@ _install_combined_certs()
 
 
 def _ssl_hint(error_msg):
-    """Человекочитаемая подсказка к ошибке проверки сертификата."""
+    """Человекочитаемая подсказка к ошибкам сети/сертификатов."""
+    hints = []
     if 'CERTIFICATE_VERIFY_FAILED' in error_msg:
-        return (
+        hints.append(
             'Проверка сертификата видео-сервера не пройдена. '
             'Попробуйте: 1) запустить update.bat (обновит yt-dlp и certifi), '
             '2) установить обновления Windows, '
             '3) проверить, не подменяет ли сертификат антивирус или прокси. '
             'Проверка сертификатов намеренно не отключается.'
         )
-    return ''
+    if any(k in error_msg for k in ('UNEXPECTED_EOF_WHILE_READING', '10054', 'Connection reset', 'timed out', 'EOF occurred', 'failed to receive handshake')):
+        hints.append(
+            'Сетевая ошибка соединения (сброс связи или таймаут). '
+            'Для YouTube: в РФ доступ к сервису часто блокируется или замедляется провайдерами. '
+            'Включите VPN / средство обхода замедлений (например, AmneziaVPN / GoodbyeDPI) или укажите рабочий HTTP/SOCKS5 прокси в настройках программы.'
+        )
+    if 'Sign in to confirm' in error_msg or 'bot' in error_msg.lower():
+        hints.append(
+            'Сервис (YouTube/VK) запрашивает подтверждение авторизации или проверку бота. '
+            'Выберите ваш браузер в поле "Cookies из браузера" (в котором вы авторизованы на сайте).'
+        )
+    return ('\n💡 ' + '\n💡 '.join(hints)) if hints else ''
 
 
-class VKDownloader:
+class VideoDownloader:
     def __init__(self, progress_callback=None, log_callback=None, finish_callback=None):
         self.progress_callback = progress_callback
         self.log_callback = log_callback
         self.finish_callback = finish_callback
         self.is_downloading = False
 
-    def download(self, url, save_path, browser_for_cookies="", video_quality="best"):
+    def download(self, url, save_path, browser_for_cookies="", video_quality="best", proxy=""):
         if self.is_downloading:
             return
             
         self.is_downloading = True
-        thread = threading.Thread(target=self._download_thread, args=(url, save_path, browser_for_cookies, video_quality))
+        thread = threading.Thread(
+            target=self._download_thread,
+            args=(url, save_path, browser_for_cookies, video_quality, proxy)
+        )
         thread.daemon = True
         thread.start()
 
-    def get_formats(self, url, browser_for_cookies=""):
+    def get_formats(self, url, browser_for_cookies="", proxy=""):
         ydl_opts = {
             'quiet': True,
             'no_warnings': True,
+            'noplaylist': True,
             'logger': MyLogger(None) # Подавляем логи при поиске
         }
         if browser_for_cookies and browser_for_cookies != "Нет":
             ydl_opts['cookiesfrombrowser'] = (browser_for_cookies.lower(),)
+            
+        if proxy and proxy.strip():
+            ydl_opts['proxy'] = proxy.strip()
+
+        ffmpeg_exe = os.path.join(BASE_DIR, "ffmpeg.exe")
+        if os.path.exists(ffmpeg_exe):
+            ydl_opts['ffmpeg_location'] = BASE_DIR
             
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -151,25 +176,33 @@ class VKDownloader:
             hint = _ssl_hint(error_msg)
             return False, error_msg + ('\n' + hint if hint else '')
 
-    def _download_thread(self, url, save_path, browser_for_cookies, video_quality):
+    def _download_thread(self, url, save_path, browser_for_cookies, video_quality, proxy=""):
         format_string = 'bestvideo+bestaudio/best'
         if video_quality != "best":
             # Если конкретное качество не найдено (например, во втором видео в очереди), качаем лучшее
-            format_string = f"{video_quality}+bestaudio/bestvideo+bestaudio/best"
+            format_string = f"{video_quality}+bestaudio/{video_quality}/bestvideo+bestaudio/best"
 
         ydl_opts = {
             'outtmpl': f'{save_path}/%(title)s.%(ext)s',
             'progress_hooks': [self._hook],
             'logger': MyLogger(self.log_callback),
             'format': format_string,
-            'merge_output_format': 'mp4'
+            'merge_output_format': 'mp4',
+            'noplaylist': True
         }
         
+        ffmpeg_exe = os.path.join(BASE_DIR, "ffmpeg.exe")
+        if os.path.exists(ffmpeg_exe):
+            ydl_opts['ffmpeg_location'] = BASE_DIR
+
         # Если выбран браузер (а не "Нет"), передаем его в yt-dlp
         if browser_for_cookies and browser_for_cookies != "Нет":
             # yt-dlp ожидает tuple с именем браузера
             ydl_opts['cookiesfrombrowser'] = (browser_for_cookies.lower(),)
             
+        if proxy and proxy.strip():
+            ydl_opts['proxy'] = proxy.strip()
+
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([url])
@@ -203,13 +236,11 @@ class VKDownloader:
                     self.progress_callback(percent)
             except ValueError:
                 pass
-            
-            # Также можно выводить статус в лог, но чтобы не спамить, будем обновлять
-            # только если это не засоряет текстовое поле. Мы ограничимся только процентами для UI.
 
         elif d['status'] == 'finished':
             if self.log_callback:
                 self.log_callback("Файл скачан. Идет склейка видео и аудио (если требуется)...\n")
+
 
 class MyLogger:
     def __init__(self, log_callback):
@@ -232,3 +263,7 @@ class MyLogger:
     def error(self, msg):
         if self.log_callback:
             self.log_callback(f"ОШИБКА: {msg}\n")
+
+
+# Алиас для обратной совместимости
+VKDownloader = VideoDownloader

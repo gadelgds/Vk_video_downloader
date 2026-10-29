@@ -1,3 +1,7 @@
 ffmpeg.exe
 ffprobe.exe
 *.exe
+__pycache__/
+*.pyc
+venv/
+.venv/
