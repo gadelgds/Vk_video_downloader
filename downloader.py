@@ -73,8 +73,40 @@ def _install_combined_certs():
 _install_combined_certs()
 
 
+def _get_js_runtimes_config():
+    """Сконфигурировать поддержку JS-рантаймов (Node, Deno, QuickJS, Bun) для yt-dlp.
+
+    YouTube использует n-challenge / signature cipher, требующие JS-рантайм.
+    yt-dlp по умолчанию проверяет только deno; передавая расширенный словарь,
+    мы подключаем установленный в системе Node.js, Deno, Bun или QuickJS.
+    """
+    runtimes = {'node': {}, 'deno': {}, 'quickjs': {}, 'bun': {}}
+    
+    # Дополнительные типовые пути к Node.js на Windows, если его нет в PATH
+    node_candidates = [
+        os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "nodejs", "node.exe"),
+        os.path.join(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"), "nodejs", "node.exe"),
+        os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "node", "node.exe"),
+        os.path.join(BASE_DIR, "node.exe"),
+    ]
+    for p in node_candidates:
+        if os.path.isfile(p):
+            runtimes['node'] = {'path': p}
+            break
+
+    deno_path = os.path.join(BASE_DIR, "deno.exe")
+    if os.path.isfile(deno_path):
+        runtimes['deno'] = {'path': deno_path}
+
+    qjs_path = os.path.join(BASE_DIR, "qjs.exe")
+    if os.path.isfile(qjs_path):
+        runtimes['quickjs'] = {'path': qjs_path}
+
+    return runtimes
+
+
 def _ssl_hint(error_msg):
-    """Человекочитаемая подсказка к ошибкам сети/сертификатов."""
+    """Человекочитаемая подсказка к ошибкам сети/сертификатов/YouTube."""
     hints = []
     if 'CERTIFICATE_VERIFY_FAILED' in error_msg:
         hints.append(
@@ -89,6 +121,12 @@ def _ssl_hint(error_msg):
             'Сетевая ошибка соединения (сброс связи или таймаут). '
             'Для YouTube: в РФ доступ к сервису часто блокируется или замедляется провайдерами. '
             'Включите VPN / средство обхода замедлений (например, AmneziaVPN / GoodbyeDPI) или укажите рабочий HTTP/SOCKS5 прокси в настройках программы.'
+        )
+    if any(k in error_msg for k in ('n challenge solving failed', 'Requested format is not available', 'Only images are available')):
+        hints.append(
+            'Не удалось расшифровать доступные форматы видео YouTube (n challenge). '
+            'Для работы YouTube требуется JS-рантайм (Node.js или Deno) и пакет yt-dlp-ejs. '
+            'Убедитесь, что установлен Node.js и запустите update.bat для обновления пакетов.'
         )
     if 'Sign in to confirm' in error_msg or 'bot' in error_msg.lower():
         hints.append(
@@ -122,6 +160,8 @@ class VideoDownloader:
             'quiet': True,
             'no_warnings': True,
             'noplaylist': True,
+            'remote_components': {'ejs:github'},
+            'js_runtimes': _get_js_runtimes_config(),
             'logger': MyLogger(None) # Подавляем логи при поиске
         }
         if browser_for_cookies and browser_for_cookies != "Нет":
@@ -188,7 +228,9 @@ class VideoDownloader:
             'logger': MyLogger(self.log_callback),
             'format': format_string,
             'merge_output_format': 'mp4',
-            'noplaylist': True
+            'noplaylist': True,
+            'remote_components': {'ejs:github'},
+            'js_runtimes': _get_js_runtimes_config()
         }
         
         ffmpeg_exe = os.path.join(BASE_DIR, "ffmpeg.exe")
