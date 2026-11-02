@@ -1,4 +1,6 @@
 {
     "save_path": "D:/Ликинг/soly",
-    "proxy": ""
+    "proxy": "",
+    "browser": "Firefox",
+    "appearance_mode": "System"
 }
