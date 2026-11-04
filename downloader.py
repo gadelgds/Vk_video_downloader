@@ -166,24 +166,18 @@ def extract_qqasmr_info(url: str, browser: str = ""):
 
 
 def normalize_url(url: str) -> tuple[str, str]:
-    """Нормализовать ссылки специальных каталогов (например, theasmrindex.com).
-
-    Возвращает: (normalized_url, note_message)
-    """
+    """Нормализовать ссылки специальных каталогов (например, theasmrindex.com)."""
     clean_url = url.strip()
     # TheASMRIndex -> YouTube или Twitch
     if "theasmrindex.com" in clean_url.lower():
-        # video: https://www.theasmrindex.com/video/<id>
         m_vid = re.search(r'theasmrindex\.com/video/([a-zA-Z0-9_\-]+)', clean_url)
         if m_vid:
             yt_id = m_vid.group(1)
             return f"https://www.youtube.com/watch?v={yt_id}", f"TheASMRIndex → YouTube ({yt_id})"
-        # channel: https://www.theasmrindex.com/channel/(UC[a-zA-Z0-9_\-]+)
         m_chan = re.search(r'theasmrindex\.com/channel/(UC[a-zA-Z0-9_\-]+)', clean_url)
         if m_chan:
             ch_id = m_chan.group(1)
             return f"https://www.youtube.com/channel/{ch_id}", f"TheASMRIndex → Канал YouTube ({ch_id})"
-        # twitch: https://www.theasmrindex.com/live/twitch/([a-zA-Z0-9_]+)
         m_tw = re.search(r'theasmrindex\.com/live/twitch/([a-zA-Z0-9_]+)', clean_url)
         if m_tw:
             tw_user = m_tw.group(1)
@@ -259,7 +253,6 @@ class VideoDownloader:
             ok, data = extract_qqasmr_info(url, browser_for_cookies)
             if not ok:
                 return False, data
-            # Для QQASMR отдаем доступные варианты: 720p видео и аудио
             formats = [
                 {'id': 'qq_video', 'label': '720p HD (MP4 Со звуком)', 'height': 720, 'tbr': 500, 'filesize': None}
             ]
@@ -354,10 +347,17 @@ class VideoDownloader:
             else:
                 url = data['video_url']
 
-        # 2. Формируем формат скачивания
-        format_string = 'bestvideo+bestaudio/best'
+        # 2. Формируем формат скачивания:
+        # Предпочитаем AAC/m4a аудиодорожку, чтобы MP4 гарантированно играл со звуком
+        # во всех стандартных плеерах Windows без проблем с Opus-кодеком.
+        format_string = 'bestvideo+bestaudio[ext=m4a]/bestvideo+bestaudio/best'
         if video_quality not in ("best", "qq_video", "qq_audio"):
-            format_string = f"{video_quality}+bestaudio/{video_quality}/bestvideo+bestaudio/best"
+            format_string = (
+                f"{video_quality}+bestaudio[ext=m4a]/"
+                f"{video_quality}+bestaudio/"
+                f"{video_quality}/"
+                f"bestvideo+bestaudio[ext=m4a]/bestvideo+bestaudio/best"
+            )
 
         outtmpl_pattern = f'{save_path}/%(title)s.%(ext)s'
         if custom_title:
@@ -433,7 +433,6 @@ class VideoDownloader:
 
         status = d.get('status')
         if status == 'downloading':
-            # Извлекаем процент скачивания
             percent_str = d.get('_percent_str', '0%').strip()
             ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
             percent_str = ansi_escape.sub('', percent_str).replace('%', '')
@@ -442,7 +441,6 @@ class VideoDownloader:
             except ValueError:
                 percent = 0.0
 
-            # Скорость
             speed = d.get('speed')
             if speed:
                 if speed >= 1024 * 1024:
@@ -453,7 +451,6 @@ class VideoDownloader:
                 speed_str = d.get('_speed_str', '--').strip()
                 speed_str = ansi_escape.sub('', speed_str)
 
-            # ETA
             eta = d.get('eta')
             if eta is not None:
                 mins, secs = divmod(int(eta), 60)
@@ -463,7 +460,6 @@ class VideoDownloader:
                 eta_str = d.get('_eta_str', '--').strip()
                 eta_str = ansi_escape.sub('', eta_str)
 
-            # Размеры
             downloaded = d.get('downloaded_bytes', 0)
             total = d.get('total_bytes') or d.get('total_bytes_estimate') or 0
             if total > 0:
